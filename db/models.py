@@ -2,7 +2,12 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Da
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+import logging
 
+
+# Imposta il livello di log a WARNING
+logging.basicConfig()
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 # Definizione della base e dell'engine del database
 DATABASE_URL = "sqlite:///backup_manager.db"
 engine = create_engine(DATABASE_URL, echo=True)

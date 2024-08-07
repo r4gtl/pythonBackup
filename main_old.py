@@ -13,7 +13,6 @@ from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from db.models import Session, BackupJob, Path, EmailAddress
 from gui.BackupJobDialog import BackupJobDialog
-import datetime
 
 load_dotenv()
 EMAIL_USER = os.getenv('EMAIL_USER')
@@ -29,7 +28,6 @@ class BackupThread(QThread):
         self.source_paths = source_paths
         self.dest_folder = dest_folder
         self.email_addresses = email_addresses
-        self._stop_requested = False
 
     def run(self):
         try:
@@ -49,10 +47,6 @@ class BackupThread(QThread):
                         os.makedirs(dest_dir)
 
                     for file in files:
-                        if self._stop_requested:
-                            self.finished.emit(False)
-                            return
-
                         src_file = os.path.join(root, file)
                         dest_file = os.path.join(dest_dir, file)
 
@@ -67,15 +61,10 @@ class BackupThread(QThread):
             self.finished.emit(False)
             raise e
 
-    def stop(self):
-        self._stop_requested = True
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_backup_job_id = None
-        self.backup_thread = None
         self.setWindowTitle("Backup Manager")
         icon_path = os.path.abspath('icons/backup.ico')
         if os.path.exists(icon_path):
@@ -89,12 +78,6 @@ class MainWindow(QMainWindow):
         self.session = Session()
         self.load_backup_jobs()
 
-        # Flag per il controllo dello stato del thread
-        self.scheduler_thread_running = True
-        # Avvia il thread dello scheduler
-        self.scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
-        self.scheduler_thread.start()
-
     def initUI(self):
         self.initToolbar()
         main_layout = QVBoxLayout()  # Main vertical layout
@@ -102,7 +85,7 @@ class MainWindow(QMainWindow):
         # Create middle layout (TreeView and Details)
         middle_layout = self.createMiddleLayout()
 
-        # Create bottom layout (ProgressBar)
+        # Create bottom layout (ProgressBar and Button)
         bottom_layout = self.createBottomLayout()
 
         # Add middle and bottom layouts to the main layout
@@ -112,6 +95,8 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
+
 
     def initToolbar(self):
         self.tb = self.addToolBar("Tool Bar")
@@ -185,13 +170,11 @@ class MainWindow(QMainWindow):
 
     def display_backup_details(self, item):
         job_id = item.data(0, 1)
+        print(f"Selected job ID: {job_id}")  # Print the selected job ID
         self.current_backup_job_id = job_id
         backup_job = self.session.get(BackupJob, job_id)
         if backup_job:
-            details = (f"Nome: {backup_job.name}\nDestinazione: {backup_job.dest_folder}\n"
-                       f"Orario: {backup_job.schedule_time}\nGiorni: {backup_job.days}\n"
-                       f"Invio Email: {backup_job.send_email}\nEmails: "
-                       f"{', '.join([email.email for email in backup_job.email_addresses])}")
+            details = f"Nome: {backup_job.name}\nDestinazione: {backup_job.dest_folder}\nOrario: {backup_job.schedule_time}\nGiorni: {backup_job.days}\nInvio Email: {backup_job.send_email}\nEmails: {', '.join([email.email for email in backup_job.email_addresses])}"
             self.details_label.setText(details)
 
     def open_backup_job_dialog(self):
@@ -207,6 +190,8 @@ class MainWindow(QMainWindow):
             if dialog.exec_() == QDialog.Accepted:
                 self.load_backup_jobs()
 
+
+
     def start_backup_job(self):
         if hasattr(self, 'current_backup_job_id'):
             print("Starting backup job...")
@@ -217,18 +202,11 @@ class MainWindow(QMainWindow):
                 email_addresses = [email.email for email in backup_job.email_addresses]
                 print(f"Source paths: {source_paths}")
                 print(f"Destination folder: {backup_job.dest_folder}")
-
-                # Stop any existing backup thread
-                if self.backup_thread and self.backup_thread.isRunning():
-                    self.backup_thread.stop()
-                    self.backup_thread.wait()
-
-                # Start a new backup thread
-                self.backup_thread = BackupThread(source_paths, backup_job.dest_folder, email_addresses)
-                self.backup_thread.progress.connect(self.progress_bar.setValue)
-                self.backup_thread.current_file.connect(self.details_label.setText)
-                self.backup_thread.finished.connect(self.backup_finished)
-                self.backup_thread.start()
+                thread = BackupThread(source_paths, backup_job.dest_folder, email_addresses)
+                thread.progress.connect(self.progress_bar.setValue)
+                thread.current_file.connect(self.details_label.setText)
+                thread.finished.connect(self.backup_finished)
+                thread.start()
             else:
                 print("Backup job not found.")
         else:
@@ -236,18 +214,16 @@ class MainWindow(QMainWindow):
 
     def backup_finished(self, success):
         self.details_label.setText("Backup completato con successo." if success else "Backup fallito.")
-        if success and self.current_backup_job_id:
-            backup_job = self.session.get(BackupJob, self.current_backup_job_id)
-            email_addresses = [email.email for email in backup_job.email_addresses] if backup_job else []
-            self.send_email(True, email_addresses)
+        if success:
+            self.send_email(True)
         else:
-            self.send_email(False, [])
+            self.send_email(False)
 
-    def send_email(self, success, email_addresses):
+    def send_email(self, success):
         sender_email = EMAIL_USER
         password = EMAIL_PASSWORD
 
-        for email_address in email_addresses:
+        for email_address in self.email_addresses_edit.toPlainText().split(','):
             receiver_email = email_address.strip()
 
             message = MIMEMultipart("alternative")
@@ -268,37 +244,17 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Failed to send email: {e}")
 
-    def run_scheduler(self):
-        while self.scheduler_thread_running:
-            for job in self.session.query(BackupJob).all():
-                if self.is_backup_due(job):
-                    self.start_scheduled_backup(job)
-            schedule.run_pending()
-            time.sleep(1)
-
-    def is_backup_due(self, job):
-        now = datetime.datetime.now()
-        # Implementa la logica per determinare se il backup è dovuto in base ai giorni e all'orario
-        return False
-
-    def start_scheduled_backup(self, job):
-        source_paths = [path.path for path in job.paths]
-        email_addresses = [email.email for email in job.email_addresses]
-        thread = BackupThread(source_paths, job.dest_folder, email_addresses)
-        thread.progress.connect(self.progress_bar.setValue)
-        thread.current_file.connect(self.details_label.setText)
-        thread.finished.connect(self.backup_finished)
-        thread.start()
-
-    def closeEvent(self, event):
-        # Stop the backup thread if it's running
-        if self.backup_thread and self.backup_thread.isRunning():
-            self.backup_thread.stop()
-            self.backup_thread.wait()  # Ensure the thread is fully stopped
-        event.accept()
+def run_scheduler():
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     mainWindow = MainWindow()
     mainWindow.show()
+
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+
     sys.exit(app.exec_())
