@@ -1,6 +1,7 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QFileDialog, QTimeEdit, QLabel, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QHBoxLayout
-from PyQt5.QtCore import QDate, QTime, QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QTreeWidget, QTreeWidgetItem, QLabel, QProgressBar, QDialog, QAction
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtGui import QIcon
 import schedule
 import time
 import threading
@@ -9,27 +10,24 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from db.models import Session, BackupJob, Path, create_tables
 from dotenv import load_dotenv
+from db.models import Session, BackupJob, Path, EmailAddress
+from BackupJobDialog import BackupJobDialog
 
 load_dotenv()
-
-
-# Recupera le credenziali dalle variabili d'ambiente
 EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-
 
 class BackupThread(QThread):
     progress = pyqtSignal(int)
     current_file = pyqtSignal(str)
     finished = pyqtSignal(bool)
 
-    def __init__(self, source_paths, dest_folder, send_email):
+    def __init__(self, source_paths, dest_folder, email_addresses):
         super().__init__()
         self.source_paths = source_paths
         self.dest_folder = dest_folder
-        self.send_email = send_email
+        self.email_addresses = email_addresses
 
     def run(self):
         try:
@@ -61,217 +59,172 @@ class BackupThread(QThread):
             self.finished.emit(True)
         except Exception as e:
             self.finished.emit(False)
-            print(f"Error during backup: {e}")
+            raise e
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        create_tables()
+        self.setWindowTitle("Backup Manager")
+        icon_path = os.path.abspath('icons/backup.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            print("Icon set successfully.")
+        else:
+            print(f"Icon not found at {icon_path}")
+
+        self.setGeometry(450, 150, 1000, 750)
         self.initUI()
         self.session = Session()
-        self.load_backup_settings()
+        self.load_backup_jobs()
 
     def initUI(self):
-        self.setWindowTitle('Backup Manager')
+        self.initToolbar()
+        main_layout = QVBoxLayout()  # Main vertical layout
 
-        layout = QVBoxLayout()
+        # Create middle layout (TreeView and Details)
+        middle_layout = self.createMiddleLayout()
 
-        self.source_button = QPushButton('Select Source Folders/Files')
-        self.source_button.clicked.connect(self.select_source_paths)
-        layout.addWidget(self.source_button)
+        # Create bottom layout (ProgressBar and Button)
+        bottom_layout = self.createBottomLayout()
 
-        self.source_table = QTableWidget(0, 1)
-        self.source_table.setHorizontalHeaderLabels(['Paths'])
-        self.source_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.source_table)
-
-        self.dest_button = QPushButton('Select Destination Folder')
-        self.dest_button.clicked.connect(self.select_dest_folder)
-        layout.addWidget(self.dest_button)
-
-        self.time_edit = QTimeEdit(self)
-        self.time_edit.setTime(QTime.currentTime())
-        layout.addWidget(self.time_edit)
-
-        self.days_layout = QHBoxLayout()
-        self.days_checkboxes = {}
-        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        for day in days:
-            checkbox = QCheckBox(day)
-            self.days_checkboxes[day] = checkbox
-            self.days_layout.addWidget(checkbox)
-        layout.addLayout(self.days_layout)
-
-        self.send_email_checkbox = QCheckBox('Send Email on Completion')
-        layout.addWidget(self.send_email_checkbox)
-
-        self.add_backup_btn = QPushButton('Add Backup')
-        self.add_backup_btn.clicked.connect(self.add_backup)
-        layout.addWidget(self.add_backup_btn)
-
-        self.status_label = QLabel('Status: Ready')
-        layout.addWidget(self.status_label)
-
-        self.progress_bar = QProgressBar(self)
-        layout.addWidget(self.progress_bar)
-
-        self.current_file_label = QLabel('Current file: None')
-        layout.addWidget(self.current_file_label)
+        # Add middle and bottom layouts to the main layout
+        main_layout.addLayout(middle_layout)
+        main_layout.addLayout(bottom_layout)
 
         container = QWidget()
-        container.setLayout(layout)
+        container.setLayout(main_layout)
         self.setCentralWidget(container)
-        self.source_paths = []
-        self.dest_folder = ""
 
-    def select_source_paths(self):
-        options = QFileDialog.Options()
-        files, _ = QFileDialog.getOpenFileNames(self, "Select Files", "", "All Files (*);;Text Files (*.txt)", options=options)
-        folder = QFileDialog.getExistingDirectory(self, 'Select Folder', options=options)
 
-        if files:
-            self.source_paths.extend(files)
-        if folder:
-            self.source_paths.append(folder)
 
-        self.update_source_table()
+    def initToolbar(self):
+        self.tb = self.addToolBar("Tool Bar")
+        self.tb.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        # ToolBar Buttons
+        # New Backup Job
+        self.addBackupJob = QAction(QIcon('icons/add.png'), "Nuovo Backup Job", self)
+        self.addBackupJob.triggered.connect(self.open_backup_job_dialog)
+        self.tb.addAction(self.addBackupJob)
+        self.tb.addSeparator()
 
-    def update_source_table(self):
-        self.source_table.setRowCount(0)
-        for path in self.source_paths:
-            row_position = self.source_table.rowCount()
-            self.source_table.insertRow(row_position)
-            self.source_table.setItem(row_position, 0, QTableWidgetItem(path))
+        # Delete Backup Job
+        self.deleteBackupJob = QAction(QIcon('icons/delete-folder.png'), "Cancella Backup Job", self)
+        # Connect to appropriate slot if required
+        self.tb.addAction(self.deleteBackupJob)
+        self.tb.addSeparator()
 
-    def select_dest_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, 'Select Destination Folder')
-        self.dest_folder = folder
+        # Close Application
+        self.chiudi = QAction(QIcon('icons/exit.png'), "Esci", self)
+        self.chiudi.triggered.connect(self.close)
+        self.tb.addAction(self.chiudi)
+        self.tb.addSeparator()
 
-    def add_backup(self):
-        time = self.time_edit.time().toString('HH:mm')
-        schedule_time = f"{time}"
-        selected_days = [day for day, checkbox in self.days_checkboxes.items() if checkbox.isChecked()]
-        days_str = ','.join(selected_days)
-        send_email = self.send_email_checkbox.isChecked()
+    def createMiddleLayout(self):
+        middle_layout = QHBoxLayout()
 
-        if self.source_paths and self.dest_folder:
-            backup_job = BackupJob(
-                name="Daily Backup",
-                dest_folder=self.dest_folder,
-                schedule_time=schedule_time,
-                days=days_str,
-                send_email=send_email
-            )
-            for path in self.source_paths:
-                backup_job.paths.append(Path(path=path))
+        # Left layout for the tree widget
+        left_layout = QVBoxLayout()
+        self.tree_widget = QTreeWidget()
+        self.tree_widget.setColumnCount(1)
+        self.tree_widget.setHeaderLabels(['Backup Jobs'])
+        self.tree_widget.itemClicked.connect(self.display_backup_details)
+        left_layout.addWidget(self.tree_widget)
 
-            self.session.add(backup_job)
-            self.session.commit()
+        # Right layout for details
+        right_layout = QVBoxLayout()
+        self.details_label = QLabel('Select a backup job to see details')
+        self.details_label.setAlignment(Qt.AlignTop)  # Align the label at the top
+        right_layout.addWidget(self.details_label)
+        right_layout.addStretch()  # Add stretch to push the label to the top
 
-            for day in selected_days:
-                if day == 'Monday':
-                    schedule.every().monday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Tuesday':
-                    schedule.every().tuesday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Wednesday':
-                    schedule.every().wednesday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Thursday':
-                    schedule.every().thursday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Friday':
-                    schedule.every().friday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Saturday':
-                    schedule.every().saturday.at(schedule_time).do(self.start_backup, backup_job.id)
-                elif day == 'Sunday':
-                    schedule.every().sunday.at(schedule_time).do(self.start_backup, backup_job.id)
+        # Ensure the left and right layouts have the same width
+        self.tree_widget.setFixedWidth(400)
+        self.details_label.setFixedWidth(400)
 
-            self.status_label.setText(f"Backup scheduled for {days_str} at {schedule_time}")
-            print(f"Backup scheduled for {days_str} at {schedule_time}")
+        middle_layout.addLayout(left_layout)
+        middle_layout.addLayout(right_layout)
+
+        return middle_layout
+
+    def createBottomLayout(self):
+        bottom_layout = QVBoxLayout()
+        self.progress_bar = QProgressBar(self)
+        bottom_layout.addWidget(self.progress_bar)
+        return bottom_layout
+
+    def load_backup_jobs(self):
+        self.tree_widget.clear()
+        backup_jobs = self.session.query(BackupJob).all()
+        for job in backup_jobs:
+            item = QTreeWidgetItem([job.name])
+            item.setData(0, 1, job.id)
+            self.tree_widget.addTopLevelItem(item)
+
+    def display_backup_details(self, item):
+        job_id = item.data(0, 1)
+        backup_job = self.session.query(BackupJob).get(job_id)
+        if backup_job:
+            details = f"Name: {backup_job.name}\nDestination: {backup_job.dest_folder}\nTime: {backup_job.schedule_time}\nDays: {backup_job.days}\nSend Email: {backup_job.send_email}\nEmails: {', '.join([email.email for email in backup_job.email_addresses])}"
+            self.details_label.setText(details)
+
+    def open_backup_job_dialog(self):
+        dialog = BackupJobDialog(parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.load_backup_jobs()
 
     def start_backup(self, backup_job_id):
-        backup_job = self.session.query(BackupJob).filter_by(id=backup_job_id).first()
+        backup_job = self.session.query(BackupJob).get(backup_job_id)
         source_paths = [path.path for path in backup_job.paths]
-        self.backup_thread = BackupThread(source_paths, backup_job.dest_folder, backup_job.send_email)
-        self.backup_thread.progress.connect(self.update_progress)
-        self.backup_thread.current_file.connect(self.update_current_file)
-        self.backup_thread.finished.connect(self.backup_finished)
-        self.backup_thread.start()
-
-    def update_progress(self, value):
-        self.progress_bar.setValue(value)
-
-    def update_current_file(self, file_path):
-        self.current_file_label.setText(f'Current file: {file_path}')
+        email_addresses = [email.email for email in backup_job.email_addresses]
+        thread = BackupThread(source_paths, backup_job.dest_folder, email_addresses)
+        thread.progress.connect(self.progress_bar.setValue)
+        thread.current_file.connect(self.details_label.setText)
+        thread.finished.connect(self.backup_finished)
+        thread.start()
 
     def backup_finished(self, success):
-        self.status_label.setText("Status: Backup completed successfully" if success else "Status: Backup failed")
-        self.current_file_label.setText('Current file: None')
-        if self.send_email_checkbox.isChecked():
-            self.send_email(success)
+        self.details_label.setText("Backup completed successfully." if success else "Backup failed.")
+        if success:
+            self.send_email(True)
+        else:
+            self.send_email(False)
 
     def send_email(self, success):
         sender_email = EMAIL_USER
-        receiver_email = EMAIL_USER
         password = EMAIL_PASSWORD
 
-        message = MIMEMultipart("alternative")
-        message["Subject"] = "Backup Completed" if success else "Backup Failed"
-        message["From"] = sender_email
-        message["To"] = receiver_email
+        for email_address in self.email_addresses_edit.toPlainText().split(','):
+            receiver_email = email_address.strip()
 
-        text = "Your backup has completed successfully." if success else "Your backup has failed."
-        part = MIMEText(text, "plain")
-        message.attach(part)
+            message = MIMEMultipart("alternative")
+            message["Subject"] = "Backup Completed" if success else "Backup Failed"
+            message["From"] = sender_email
+            message["To"] = receiver_email
 
-        try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(sender_email, password)
-                server.sendmail(
-                    sender_email, receiver_email, message.as_string()
-                )
-        except Exception as e:
-            print(f"Failed to send email: {e}")
+            text = "Your backup has completed successfully." if success else "Your backup has failed."
+            part = MIMEText(text, "plain")
+            message.attach(part)
 
-    def load_backup_settings(self):
-        backup_job = self.session.query(BackupJob).order_by(BackupJob.created_at.desc()).first()
-        if backup_job:
-            self.dest_folder = backup_job.dest_folder
-            schedule_time = backup_job.schedule_time
-            hours, minutes = map(int, schedule_time.split(':'))
-            self.time_edit.setTime(QTime(hours, minutes))
-            self.source_paths = [path.path for path in backup_job.paths]
-            self.update_source_table()
-
-            if backup_job.days:
-                selected_days = backup_job.days.split(',')
-                for day in selected_days:
-                    if day in self.days_checkboxes:
-                        self.days_checkboxes[day].setChecked(True)
-
-            send_email = backup_job.send_email if backup_job.send_email is not None else False
-            self.send_email_checkbox.setChecked(send_email)
-        else:
-            self.dest_folder = ""
-            self.time_edit.setTime(QTime.currentTime())
-            self.source_paths = []
-            self.update_source_table()
-            for checkbox in self.days_checkboxes.values():
-                checkbox.setChecked(False)
-            self.send_email_checkbox.setChecked(False)
+            try:
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                    server.login(sender_email, password)
+                    server.sendmail(
+                        sender_email, receiver_email, message.as_string()
+                    )
+            except Exception as e:
+                print(f"Failed to send email: {e}")
 
 def run_scheduler():
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-def main():
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     mainWindow = MainWindow()
+    mainWindow.show()
 
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
 
-    mainWindow.show()
     sys.exit(app.exec_())
-
-if __name__ == '__main__':
-    main()
