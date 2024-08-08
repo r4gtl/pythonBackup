@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, ForeignKey
-from sqlalchemy.orm import relationship, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, sessionmaker, declarative_base
+
 from datetime import datetime
 import logging
 
@@ -20,11 +20,13 @@ class Path(Base):
     path = Column(String, nullable=False)
     backup_job_id = Column(Integer, ForeignKey('backup_jobs.id'))
 
+
 class EmailAddress(Base):
     __tablename__ = 'email_addresses'
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False)
     backup_job_id = Column(Integer, ForeignKey('backup_jobs.id'))
+    backup_job = relationship("BackupJob", back_populates="email_addresses")
 
 class BackupJob(Base):
     __tablename__ = 'backup_jobs'
@@ -36,7 +38,7 @@ class BackupJob(Base):
     send_email = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     paths = relationship('Path', backref='backup_job', cascade='all, delete-orphan')
-    email_addresses = relationship('EmailAddress', backref='backup_job', cascade='all, delete-orphan')
+    email_addresses = relationship('EmailAddress', back_populates='backup_job', cascade='all, delete-orphan')
 
 
 def create_tables():

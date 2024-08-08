@@ -87,21 +87,24 @@ class BackupJobDialog(QDialog):
         self.dest_folder = folder
 
     def load_backup_job(self):
-        self.name_edit.setText(self.backup_job.name)
-        self.time_edit.setTime(QTime.fromString(self.backup_job.schedule_time, 'HH:mm'))
-        self.source_paths = [path.path for path in self.backup_job.paths]
-        self.update_source_table()
-        self.dest_folder = self.backup_job.dest_folder
+        if self.backup_job:
+            self.name_edit.setText(self.backup_job.name)
+            self.time_edit.setTime(QTime.fromString(self.backup_job.schedule_time, 'HH:mm'))
+            self.source_paths = [path.path for path in self.backup_job.paths]
+            self.update_source_table()
+            self.dest_folder = self.backup_job.dest_folder
 
-        if self.backup_job.days:
-            selected_days = self.backup_job.days.split(',')
-            for day in selected_days:
-                if day in self.days_checkboxes:
-                    self.days_checkboxes[day].setChecked(True)
+            if self.backup_job.days:
+                selected_days = self.backup_job.days.split(',')
+                for day in selected_days:
+                    if day in self.days_checkboxes:
+                        self.days_checkboxes[day].setChecked(True)
 
-        self.send_email_checkbox.setChecked(self.backup_job.send_email)
-        email_addresses = [email.email for email in self.backup_job.email_addresses]
-        self.email_addresses_edit.setText(','.join(email_addresses))
+            self.send_email_checkbox.setChecked(self.backup_job.send_email)
+            email_addresses = [email.email for email in self.backup_job.email_addresses]
+            self.email_addresses_edit.setText(','.join(email_addresses))
+        else:
+            print("No backup job selected.")
 
     def save_backup_job(self):
         name = self.name_edit.text()
@@ -111,24 +114,49 @@ class BackupJobDialog(QDialog):
         send_email = self.send_email_checkbox.isChecked()
         email_addresses = self.email_addresses_edit.toPlainText().split(',')
 
-        if not self.backup_job:
-            self.backup_job = BackupJob(name=name, dest_folder=self.dest_folder, schedule_time=schedule_time, days=days_str, send_email=send_email)
-            self.session.add(self.backup_job)
+        if self.backup_job:
+            # Aggiorna l'oggetto esistente
+            backup_job = self.session.merge(self.backup_job)
+
+            backup_job.name = name
+            backup_job.dest_folder = self.dest_folder
+            backup_job.schedule_time = schedule_time
+            backup_job.days = days_str
+            backup_job.send_email = send_email
+
+            # Pulisci le relazioni esistenti
+            backup_job.paths.clear()
+            backup_job.email_addresses.clear()
+
+            # Aggiungi i nuovi percorsi e indirizzi email
+            for path in self.source_paths:
+                backup_job.paths.append(Path(path=path))
+
+            for email in email_addresses:
+                backup_job.email_addresses.append(EmailAddress(email=email.strip()))
+
+            self.session.commit()
+            self.accept()
         else:
-            self.backup_job.name = name
-            self.backup_job.dest_folder = self.dest_folder
-            self.backup_job.schedule_time = schedule_time
-            self.backup_job.days = days_str
-            self.backup_job.send_email = send_email
+            # Crea un nuovo BackupJob
+            backup_job = BackupJob(
+                name=name,
+                dest_folder=self.dest_folder,
+                schedule_time=schedule_time,
+                days=days_str,
+                send_email=send_email
+            )
 
-            self.backup_job.paths.clear()
-            self.backup_job.email_addresses.clear()
+            for path in self.source_paths:
+                backup_job.paths.append(Path(path=path))
 
-        for path in self.source_paths:
-            self.backup_job.paths.append(Path(path=path))
+            for email in email_addresses:
+                backup_job.email_addresses.append(EmailAddress(email=email.strip()))
 
-        for email in email_addresses:
-            self.backup_job.email_addresses.append(EmailAddress(email=email.strip()))
+            self.session.add(backup_job)
+            self.session.commit()
+            self.accept()
 
-        self.session.commit()
-        self.accept()
+
+
+

@@ -11,7 +11,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
-from db.models import Session, BackupJob, Path, EmailAddress
+from db.models import Session, BackupJob, Path, EmailAddress, create_tables
 from gui.BackupJobDialog import BackupJobDialog
 import datetime
 
@@ -37,43 +37,68 @@ class BackupThread(QThread):
             if not os.path.exists(self.dest_folder):
                 os.makedirs(self.dest_folder)
 
-            total_files = sum([len(files) for path in self.source_paths for r, d, files in os.walk(path)])
+            # Calcolo del numero totale di file da copiare
+            total_files = 0
+            for source_path in self.source_paths:
+                if os.path.isdir(source_path):
+                    for _, _, files in os.walk(source_path):
+                        total_files += len(files)
+                elif os.path.isfile(source_path):
+                    total_files += 1
+
+            print(f"Total files to copy: {total_files}")
+
             copied_files = 0
 
-            for source_folder in self.source_paths:
-                for root, dirs, files in os.walk(source_folder):
-                    relative_path = os.path.relpath(root, source_folder)
-                    dest_dir = os.path.join(self.dest_folder, relative_path)
+            for source_path in self.source_paths:
+                if os.path.isdir(source_path):
+                    # Trattiamo directory
+                    for root, _, files in os.walk(source_path):
+                        relative_path = os.path.relpath(root, source_path)
+                        dest_dir = os.path.join(self.dest_folder, relative_path)
 
-                    if not os.path.exists(dest_dir):
-                        os.makedirs(dest_dir)
+                        if not os.path.exists(dest_dir):
+                            os.makedirs(dest_dir)
 
-                    for file in files:
-                        if self._stop_requested:
-                            self.finished.emit(False)
-                            return
+                        for file in files:
+                            if self._stop_requested:
+                                self.finished.emit(False)
+                                return
 
-                        src_file = os.path.join(root, file)
-                        dest_file = os.path.join(dest_dir, file)
+                            src_file = os.path.join(root, file)
+                            dest_file = os.path.join(dest_dir, file)
 
-                        if not os.path.exists(dest_file) or os.path.getmtime(src_file) > os.path.getmtime(dest_file):
-                            shutil.copy2(src_file, dest_file)
-                            copied_files += 1
-                            self.progress.emit(int(copied_files / total_files * 100))
-                            self.current_file.emit(src_file)
+                            print(f"Copying file from {src_file} to {dest_file}")
+                            if not os.path.exists(dest_file) or os.path.getmtime(src_file) > os.path.getmtime(
+                                    dest_file):
+                                shutil.copy2(src_file, dest_file)
+                                copied_files += 1
+                                self.progress.emit(int(copied_files / total_files * 100))
+                                self.current_file.emit(src_file)
+
+                elif os.path.isfile(source_path):
+                    # Trattiamo file singoli
+                    dest_file = os.path.join(self.dest_folder, os.path.basename(source_path))
+                    shutil.copy2(source_path, dest_file)
+                    copied_files += 1
+                    self.progress.emit(int(copied_files / total_files * 100))
+                    self.current_file.emit(source_path)
 
             self.finished.emit(True)
         except Exception as e:
+            print(f"Error during backup: {e}")
             self.finished.emit(False)
             raise e
-
-    def stop(self):
-        self._stop_requested = True
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        create_tables()
+        self.scheduler_thread_running = True
+        self.last_check_time = 0
+        self.check_interval = 60  # 1 minuto
+
         self.current_backup_job_id = None
         self.backup_thread = None
         self.setWindowTitle("Backup Manager")
@@ -270,9 +295,13 @@ class MainWindow(QMainWindow):
 
     def run_scheduler(self):
         while self.scheduler_thread_running:
-            for job in self.session.query(BackupJob).all():
-                if self.is_backup_due(job):
-                    self.start_scheduled_backup(job)
+            current_time = time.time()
+            if current_time - self.last_check_time >= self.check_interval:
+                for job in self.session.query(BackupJob).all():
+                    if self.is_backup_due(job):
+                        self.start_scheduled_backup(job)
+                self.last_check_time = current_time
+
             schedule.run_pending()
             time.sleep(1)
 
