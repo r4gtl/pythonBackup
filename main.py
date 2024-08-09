@@ -1,6 +1,6 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QTreeWidget, QTreeWidgetItem, QLabel, QProgressBar, QDialog, QAction, QPushButton
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QIcon
 import schedule
 import time
@@ -182,6 +182,9 @@ class MainWindow(QMainWindow):
         self.start_backup_btn = QPushButton('Start Backup Job')
         self.start_backup_btn.clicked.connect(self.start_backup_job)
         right_layout.addWidget(self.start_backup_btn)
+        self.refresh_btn = QPushButton('refresh')
+        self.refresh_btn.clicked.connect(self.on_backup_job_saved)
+        right_layout.addWidget(self.refresh_btn)
 
         right_layout.addStretch()  # Add stretch to push the label to the top
 
@@ -200,13 +203,43 @@ class MainWindow(QMainWindow):
         bottom_layout.addWidget(self.progress_bar)
         return bottom_layout
 
+
+
+    def on_backup_job_saved(self, backup_job):
+        print("on_backup_job_saved function called")
+        # Logica per aggiornare la UI della finestra principale
+        print(f"Backup job {backup_job.name} salvato correttamente.")
+
+        # Memorizza l'elemento selezionato
+        current_item = self.tree_widget.currentItem()
+        print(f"Current item: {current_item}")
+        # Aggiorna la lista dei backup jobs
+        self.update_backup_job_list()
+
+
+        # Reseleziona l'elemento precedentemente selezionato
+        if current_item:
+            print(f"current_item: {current_item}")
+            items = self.tree_widget.findItems(backup_job.name, Qt.MatchExactly)
+            print(f"items: {items}")
+            if items:
+                item = items[0]
+                print(f"item: {item}")
+                self.tree_widget.setCurrentItem(item)
+                self.display_backup_details(item)
+
+    def update_backup_job_list(self):
+        self.load_backup_jobs()
+
     def load_backup_jobs(self):
         self.tree_widget.clear()
         backup_jobs = self.session.query(BackupJob).all()
         for job in backup_jobs:
+            print(f"Sto caricando il Backup job: {job.name}")
             item = QTreeWidgetItem([job.name])
             item.setData(0, 1, job.id)
             self.tree_widget.addTopLevelItem(item)
+        print("Backup jobs loaded")
 
     def display_backup_details(self, item):
         job_id = item.data(0, 1)
@@ -219,18 +252,40 @@ class MainWindow(QMainWindow):
                        f"{', '.join([email.email for email in backup_job.email_addresses])}")
             self.details_label.setText(details)
 
-    def open_backup_job_dialog(self):
-        dialog = BackupJobDialog(parent=self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.load_backup_jobs()
+    def edit_backup_job(self, item=None):
+        if item is not None:
+            job_id = item.data(0, 1)
+            backup_job = self.session.get(BackupJob, job_id)
+            #backup_job = self.session.query(BackupJob).get(job_id)
 
-    def edit_backup_job(self, item):
+            if backup_job:
+                dialog = BackupJobDialog(backup_job, parent=self)
+                dialog.backup_job_saved.connect(self.on_backup_job_saved)
+
+                if dialog.exec_() == QDialog.Accepted:
+                    self.load_backup_jobs()
+            else:
+                print("Backup job not found.")
+        else:
+            print("No item provided.")
+
+    def edit_backup_job_elimina(self, item):
         job_id = item.data(0, 1)
         backup_job = self.session.query(BackupJob).get(job_id)
         if backup_job:
             dialog = BackupJobDialog(backup_job, parent=self)  # Pass the backup job to the dialog
+            dialog.backup_job_saved.connect(self.on_backup_job_saved)
+            print("Connected backup_job_saved signal to on_backup_job_saved method")
             if dialog.exec_() == QDialog.Accepted:
                 self.load_backup_jobs()
+
+    def open_backup_job_dialog(self, backup_job=None):
+        dialog = BackupJobDialog(backup_job, self)
+        print("Attempting to connect backup_job_saved signal to on_backup_job_saved method")
+        dialog.backup_job_saved.connect(self.on_backup_job_saved)
+        print("Connected backup_job_saved signal to on_backup_job_saved method")
+        dialog.exec_()
+
 
     def start_backup_job(self):
         if hasattr(self, 'current_backup_job_id'):

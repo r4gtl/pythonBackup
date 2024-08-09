@@ -1,8 +1,9 @@
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPushButton, QLineEdit, QTimeEdit, QCheckBox, QHBoxLayout, QLabel, QTextEdit, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView
-from PyQt5.QtCore import QTime
+from PyQt5.QtCore import QTime, pyqtSignal, pyqtSlot
 from db.models import Session, BackupJob, Path, EmailAddress
 
 class BackupJobDialog(QDialog):
+    backup_job_saved = pyqtSignal(BackupJob)
     def __init__(self, backup_job=None, parent=None):
         super().__init__(parent)
         self.backup_job = backup_job
@@ -54,7 +55,7 @@ class BackupJobDialog(QDialog):
         self.email_addresses_edit.setPlaceholderText("Enter email addresses separated by commas")
         layout.addWidget(self.email_addresses_edit)
 
-        self.save_button = QPushButton('Save Backup Job')
+        self.save_button = QPushButton('Salva il Backup Job')
         self.save_button.clicked.connect(self.save_backup_job)
         layout.addWidget(self.save_button)
 
@@ -115,30 +116,38 @@ class BackupJobDialog(QDialog):
         email_addresses = self.email_addresses_edit.toPlainText().split(',')
 
         if self.backup_job:
-            # Aggiorna l'oggetto esistente
+            # Recupera l'oggetto dalla sessione corrente
             backup_job = self.session.merge(self.backup_job)
-
+            print(f"Backup job da save backup job: {name}")
+            # Aggiorna i campi
             backup_job.name = name
             backup_job.dest_folder = self.dest_folder
-            backup_job.schedule_time = schedule_time
+            backup_job.schedule_time = schedule_time  # Aggiorna il campo schedule_time
             backup_job.days = days_str
             backup_job.send_email = send_email
+
+            # Debug: verifica che l'orario venga aggiornato
+            print(f"Updating backup job: {backup_job.schedule_time}")
 
             # Pulisci le relazioni esistenti
             backup_job.paths.clear()
             backup_job.email_addresses.clear()
 
-            # Aggiungi i nuovi percorsi e indirizzi email
+            # Aggiungi i nuovi percorsi
             for path in self.source_paths:
                 backup_job.paths.append(Path(path=path))
 
+            # Aggiungi i nuovi indirizzi email
             for email in email_addresses:
                 backup_job.email_addresses.append(EmailAddress(email=email.strip()))
 
+            # Salva le modifiche
             self.session.commit()
+            self.backup_job_saved.emit(backup_job)
+            print("Signal backup_job_saved emitted")
             self.accept()
         else:
-            # Crea un nuovo BackupJob
+            # Crea un nuovo BackupJob e aggiungi le relazioni
             backup_job = BackupJob(
                 name=name,
                 dest_folder=self.dest_folder,
@@ -153,9 +162,13 @@ class BackupJobDialog(QDialog):
             for email in email_addresses:
                 backup_job.email_addresses.append(EmailAddress(email=email.strip()))
 
+            # Aggiungi il nuovo BackupJob alla sessione
             self.session.add(backup_job)
             self.session.commit()
+            self.backup_job_saved.emit(backup_job)
+            print("Signal backup_job_saved emitted")
             self.accept()
+
 
 
 
