@@ -19,19 +19,19 @@ class BackupJobDialog(QDialog):
         layout = QVBoxLayout()
 
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText('Enter backup job name')
+        self.name_edit.setPlaceholderText('Inserisci un nome per il Backup Job')
         layout.addWidget(self.name_edit)
 
-        self.source_button = QPushButton('Select Source Folders/Files')
+        self.source_button = QPushButton('Seleziona cartelle/files')
         self.source_button.clicked.connect(self.select_source_paths)
         layout.addWidget(self.source_button)
 
         self.source_table = QTableWidget(0, 1)
-        self.source_table.setHorizontalHeaderLabels(['Paths'])
+        self.source_table.setHorizontalHeaderLabels(['Percorsi'])
         self.source_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.source_table)
 
-        self.dest_button = QPushButton('Select Destination Folder')
+        self.dest_button = QPushButton('Seleziona cartella di destinazione')
         self.dest_button.clicked.connect(self.select_dest_folder)
         layout.addWidget(self.dest_button)
 
@@ -41,18 +41,19 @@ class BackupJobDialog(QDialog):
 
         self.days_layout = QHBoxLayout()
         self.days_checkboxes = {}
-        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        #days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        days = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
         for day in days:
             checkbox = QCheckBox(day)
             self.days_checkboxes[day] = checkbox
             self.days_layout.addWidget(checkbox)
         layout.addLayout(self.days_layout)
 
-        self.send_email_checkbox = QCheckBox('Send Email on Completion')
+        self.send_email_checkbox = QCheckBox('Invia email al termine')
         layout.addWidget(self.send_email_checkbox)
 
         self.email_addresses_edit = QTextEdit()
-        self.email_addresses_edit.setPlaceholderText("Enter email addresses separated by commas")
+        self.email_addresses_edit.setPlaceholderText("Aggiungi indirizzi email separati da una virgola")
         layout.addWidget(self.email_addresses_edit)
 
         self.save_button = QPushButton('Salva il Backup Job')
@@ -66,8 +67,8 @@ class BackupJobDialog(QDialog):
 
     def select_source_paths(self):
         options = QFileDialog.Options()
-        files, _ = QFileDialog.getOpenFileNames(self, "Select Files", "", "All Files (*);;Text Files (*.txt)", options=options)
-        folder = QFileDialog.getExistingDirectory(self, 'Select Folder', options=options)
+        files, _ = QFileDialog.getOpenFileNames(self, "Seleziona files", "", "Tutti i Files (*);;Files TXT (*.txt)", options=options)
+        folder = QFileDialog.getExistingDirectory(self, 'Seleziona Cartella', options=options)
 
         if files:
             self.source_paths.extend(files)
@@ -84,7 +85,7 @@ class BackupJobDialog(QDialog):
             self.source_table.setItem(row_position, 0, QTableWidgetItem(path))
 
     def select_dest_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, 'Select Destination Folder')
+        folder = QFileDialog.getExistingDirectory(self, 'Seleziona cartella di destinazione')
         self.dest_folder = folder
 
     def load_backup_job(self):

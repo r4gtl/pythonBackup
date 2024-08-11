@@ -19,6 +19,8 @@ load_dotenv()
 EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
 
+
+'''
 class BackupThread(QThread):
     progress = pyqtSignal(int)
     current_file = pyqtSignal(str)
@@ -89,6 +91,74 @@ class BackupThread(QThread):
             print(f"Error during backup: {e}")
             self.finished.emit(False)
             raise e
+'''
+
+class BackupThread(QThread):
+    progress = pyqtSignal(int)
+    current_file = pyqtSignal(str)
+    finished = pyqtSignal(bool)
+
+    def __init__(self, source_paths, dest_folder, email_addresses):
+        super().__init__()
+        self.source_paths = source_paths
+        self.dest_folder = dest_folder
+        self.email_addresses = email_addresses
+        self._stop_requested = False
+
+    def run(self):
+        try:
+            self.dest_folder = os.path.join(self.dest_folder, 'backup')
+            if not os.path.exists(self.dest_folder):
+                os.makedirs(self.dest_folder)
+
+            total_files = 0
+            for source_path in self.source_paths:
+                if os.path.isdir(source_path):
+                    for _, _, files in os.walk(source_path):
+                        total_files += len(files)
+                elif os.path.isfile(source_path):
+                    total_files += 1
+
+            print(f"Total files to copy: {total_files}")
+
+            copied_files = 0
+
+            for source_path in self.source_paths:
+                if os.path.isdir(source_path):
+                    for root, _, files in os.walk(source_path):
+                        relative_path = os.path.relpath(root, source_path)
+                        dest_dir = os.path.join(self.dest_folder, relative_path)
+
+                        if not os.path.exists(dest_dir):
+                            os.makedirs(dest_dir)
+
+                        for file in files:
+                            if self._stop_requested:
+                                self.finished.emit(False)
+                                return
+
+                            src_file = os.path.join(root, file)
+                            dest_file = os.path.join(dest_dir, file)
+
+                            print(f"Copying file from {src_file} to {dest_file}")
+                            if not os.path.exists(dest_file) or os.path.getmtime(src_file) > os.path.getmtime(dest_file):
+                                shutil.copy2(src_file, dest_file)
+                                copied_files += 1
+                                self.progress.emit(int(copied_files / total_files * 100))
+                                self.current_file.emit(src_file)
+
+                elif os.path.isfile(source_path):
+                    dest_file = os.path.join(self.dest_folder, os.path.basename(source_path))
+                    shutil.copy2(source_path, dest_file)
+                    copied_files += 1
+                    self.progress.emit(int(copied_files / total_files * 100))
+                    self.current_file.emit(source_path)
+
+            self.finished.emit(True)
+        except Exception as e:
+            print(f"Error during backup: {e}")
+            self.finished.emit(False)
+            raise
 
 
 class MainWindow(QMainWindow):
@@ -97,7 +167,7 @@ class MainWindow(QMainWindow):
         create_tables()
         self.scheduler_thread_running = True
         self.last_check_time = 0
-        self.check_interval = 60  # 1 minuto
+        self.check_interval = 30  # 1 minuto
 
         self.current_backup_job_id = None
         self.backup_thread = None
@@ -119,6 +189,7 @@ class MainWindow(QMainWindow):
         # Avvia il thread dello scheduler
         self.scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.scheduler_thread.start()
+        print("Scheduler thread started")
 
     def initUI(self):
         self.initToolbar()
@@ -206,7 +277,7 @@ class MainWindow(QMainWindow):
 
 
     def on_backup_job_saved(self, backup_job):
-        print("on_backup_job_saved function called")
+        print("Chiamato")
         # Logica per aggiornare la UI della finestra principale
         print(f"Backup job {backup_job.name} salvato correttamente.")
 
@@ -214,6 +285,7 @@ class MainWindow(QMainWindow):
         current_item = self.tree_widget.currentItem()
         print(f"Current item: {current_item}")
         # Aggiorna la lista dei backup jobs
+        self.details_label.clear()
         self.update_backup_job_list()
 
 
@@ -231,6 +303,7 @@ class MainWindow(QMainWindow):
     def update_backup_job_list(self):
         self.load_backup_jobs()
 
+
     def load_backup_jobs(self):
         self.tree_widget.clear()
         backup_jobs = self.session.query(BackupJob).all()
@@ -244,6 +317,7 @@ class MainWindow(QMainWindow):
     def display_backup_details(self, item):
         job_id = item.data(0, 1)
         self.current_backup_job_id = job_id
+        self.session.expire_all() # Questo forza il refresh degli oggetti dalla sessione
         backup_job = self.session.get(BackupJob, job_id)
         if backup_job:
             details = (f"Nome: {backup_job.name}\nDestinazione: {backup_job.dest_folder}\n"
@@ -348,26 +422,84 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Failed to send email: {e}")
 
+
     def run_scheduler(self):
+        print("Scheduler thread running")
         while self.scheduler_thread_running:
             current_time = time.time()
+            elapsed_time = current_time - self.last_check_time
+            print(f"Current time: {current_time}")
+            print(f"Last check time: {self.last_check_time}")
+            print(f"Elapsed time: {elapsed_time}")
+
             if current_time - self.last_check_time >= self.check_interval:
+                print("Checking backup jobs")
                 for job in self.session.query(BackupJob).all():
                     if self.is_backup_due(job):
-                        self.start_scheduled_backup(job)
+                        print(f"Starting backup for job: {job.name}")
+                        #self.start_scheduled_backup(job)
+                        # Avvia il backup in un nuovo thread
+                    thread = BackupThread([path.path for path in job.paths], job.dest_folder, [email.email for email in job.email_addresses])
+                    thread.progress.connect(self.progress_bar.setValue)
+                    thread.current_file.connect(self.details_label.setText)
+                    thread.finished.connect(self.backup_finished)
+                    thread.start()
                 self.last_check_time = current_time
 
             schedule.run_pending()
             time.sleep(1)
 
+
+    '''
+        days_mapping = {
+            'Lunedì': 'Monday',
+            'Martedì': 'Tuesday',
+            'Mercoledì': 'Wednesday',
+            'Giovedì': 'Thursday',
+            'Venerdì': 'Friday',
+            'Sabato': 'Saturday',
+            'Domenica': 'Sunday'
+        }
+    '''
+
+
+
     def is_backup_due(self, job):
         now = datetime.datetime.now()
-        # Implementa la logica per determinare se il backup è dovuto in base ai giorni e all'orario
-        return False
+
+        # Ottieni il giorno della settimana corrente in italiano con la prima lettera maiuscola
+        current_day_english = now.strftime("%A")  # Giorno in inglese, e.g., 'Sunday'
+        current_day_capitalized = current_day_english.capitalize()  # Giorno con la prima lettera maiuscola
+
+        print(f"Current day in English: {current_day_capitalized}")
+
+        current_time = now.strftime("%H:%M")
+        try:
+            scheduled_time = datetime.datetime.strptime(job.schedule_time, "%H:%M").strftime("%H:%M")
+        except ValueError as e:
+            print(f"Error parsing scheduled_time: {e}")
+            return False
+
+        # Controlla se il giorno corrente è presente nei giorni pianificati
+        scheduled_days = [day.strip() for day in job.days.split(',')]
+        print(f"Scheduled days from job: {scheduled_days}")
+
+        # Verifica se il giorno corrente è presente nella lista dei giorni programmati
+        is_due_today = current_day_capitalized in scheduled_days
+        is_time_matching = current_time == scheduled_time
+
+        print(f"Checking if backup is due: Job={job.name}, Time={scheduled_time}, Day={job.days}")
+        print(f"Current day (Capitalized): {current_day_capitalized}, Scheduled days: {scheduled_days}")
+        print(f"Is due today? {is_due_today}")
+        print(f"Is time matching? {is_time_matching}")
+
+        return is_due_today and is_time_matching
+
 
     def start_scheduled_backup(self, job):
         source_paths = [path.path for path in job.paths]
         email_addresses = [email.email for email in job.email_addresses]
+        print(f"Starting backup for job: {job.name}")
         thread = BackupThread(source_paths, job.dest_folder, email_addresses)
         thread.progress.connect(self.progress_bar.setValue)
         thread.current_file.connect(self.details_label.setText)
