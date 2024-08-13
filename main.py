@@ -1,7 +1,14 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QTreeWidget, QTreeWidgetItem, QLabel, QProgressBar, QDialog, QAction, QPushButton
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout,
+                             QHBoxLayout, QWidget, QTreeWidget,
+                             QTreeWidgetItem, QLabel, QProgressBar,
+                             QDialog, QAction, QPushButton, QSplitter,
+                             QMessageBox, QSystemTrayIcon, QMenu
+                             )
+
+
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QCoreApplication
+from PyQt5.QtGui import QIcon, QMovie
 import schedule
 import time
 import threading
@@ -20,78 +27,6 @@ EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
 
 
-'''
-class BackupThread(QThread):
-    progress = pyqtSignal(int)
-    current_file = pyqtSignal(str)
-    finished = pyqtSignal(bool)
-
-    def __init__(self, source_paths, dest_folder, email_addresses):
-        super().__init__()
-        self.source_paths = source_paths
-        self.dest_folder = dest_folder
-        self.email_addresses = email_addresses
-        self._stop_requested = False
-
-    def run(self):
-        try:
-            self.dest_folder = os.path.join(self.dest_folder, 'backup')
-            if not os.path.exists(self.dest_folder):
-                os.makedirs(self.dest_folder)
-
-            # Calcolo del numero totale di file da copiare
-            total_files = 0
-            for source_path in self.source_paths:
-                if os.path.isdir(source_path):
-                    for _, _, files in os.walk(source_path):
-                        total_files += len(files)
-                elif os.path.isfile(source_path):
-                    total_files += 1
-
-            print(f"Total files to copy: {total_files}")
-
-            copied_files = 0
-
-            for source_path in self.source_paths:
-                if os.path.isdir(source_path):
-                    # Trattiamo directory
-                    for root, _, files in os.walk(source_path):
-                        relative_path = os.path.relpath(root, source_path)
-                        dest_dir = os.path.join(self.dest_folder, relative_path)
-
-                        if not os.path.exists(dest_dir):
-                            os.makedirs(dest_dir)
-
-                        for file in files:
-                            if self._stop_requested:
-                                self.finished.emit(False)
-                                return
-
-                            src_file = os.path.join(root, file)
-                            dest_file = os.path.join(dest_dir, file)
-
-                            print(f"Copying file from {src_file} to {dest_file}")
-                            if not os.path.exists(dest_file) or os.path.getmtime(src_file) > os.path.getmtime(
-                                    dest_file):
-                                shutil.copy2(src_file, dest_file)
-                                copied_files += 1
-                                self.progress.emit(int(copied_files / total_files * 100))
-                                self.current_file.emit(src_file)
-
-                elif os.path.isfile(source_path):
-                    # Trattiamo file singoli
-                    dest_file = os.path.join(self.dest_folder, os.path.basename(source_path))
-                    shutil.copy2(source_path, dest_file)
-                    copied_files += 1
-                    self.progress.emit(int(copied_files / total_files * 100))
-                    self.current_file.emit(source_path)
-
-            self.finished.emit(True)
-        except Exception as e:
-            print(f"Error during backup: {e}")
-            self.finished.emit(False)
-            raise e
-'''
 
 class BackupThread(QThread):
     progress = pyqtSignal(int)
@@ -164,6 +99,22 @@ class BackupThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Configura la system tray
+        # Configura la system tray
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon('icons/backup.ico'))  # Icona predefinita
+        self.tray_icon.show()
+
+        # Crea un menu contestuale per la system tray
+        tray_menu = QMenu()
+        open_action = QAction('Open', self)
+        open_action.triggered.connect(self.show)
+        tray_menu.addAction(open_action)
+        exit_action = QAction('Exit', self)
+        exit_action.triggered.connect(QCoreApplication.instance().quit)
+        tray_menu.addAction(exit_action)
+        self.tray_icon.setContextMenu(tray_menu)
+
         create_tables()
         self.scheduler_thread_running = True
         self.last_check_time = 0
@@ -192,6 +143,7 @@ class MainWindow(QMainWindow):
         print("Scheduler thread started")
 
     def initUI(self):
+        #self.setStyleSheet("background-color: white;")
         self.initToolbar()
         main_layout = QVBoxLayout()  # Main vertical layout
 
@@ -208,6 +160,7 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
 
     def initToolbar(self):
         self.tb = self.addToolBar("Tool Bar")
@@ -231,41 +184,70 @@ class MainWindow(QMainWindow):
         self.tb.addAction(self.chiudi)
         self.tb.addSeparator()
 
+
     def createMiddleLayout(self):
         middle_layout = QHBoxLayout()
 
-        # Left layout for the tree widget
-        left_layout = QVBoxLayout()
+        # Crea un QSplitter per gestire la larghezza dei layout
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left layout per il tree widget
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
         self.tree_widget = QTreeWidget()
         self.tree_widget.setColumnCount(1)
         self.tree_widget.setHeaderLabels(['Backup Jobs'])
         self.tree_widget.itemClicked.connect(self.display_backup_details)
         self.tree_widget.itemDoubleClicked.connect(self.edit_backup_job)
         left_layout.addWidget(self.tree_widget)
+        left_widget.setLayout(left_layout)
 
-        # Right layout for details
-        right_layout = QVBoxLayout()
+        # Right layout per i dettagli
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
+        # Imposta lo sfondo bianco al right_widget
+        right_widget.setStyleSheet("background-color: white;")
+
+        # Etichetta dei dettagli
         self.details_label = QLabel('Select a backup job to see details')
-        self.details_label.setAlignment(Qt.AlignTop)  # Align the label at the top
+        self.details_label.setAlignment(Qt.AlignTop)  # Allinea l'etichetta in alto
         right_layout.addWidget(self.details_label)
 
-        # Add start backup button
+        # Pulsante per avviare il backup
         self.start_backup_btn = QPushButton('Start Backup Job')
         self.start_backup_btn.clicked.connect(self.start_backup_job)
+        self.start_backup_btn.hide()  # Nascondi il pulsante all'avvio
         right_layout.addWidget(self.start_backup_btn)
-        self.refresh_btn = QPushButton('refresh')
-        self.refresh_btn.clicked.connect(self.on_backup_job_saved)
-        right_layout.addWidget(self.refresh_btn)
 
-        right_layout.addStretch()  # Add stretch to push the label to the top
+        # Aggiungi lo spinner centrato
+        spinner_layout = QHBoxLayout()  # Layout per centrare lo spinner orizzontalmente
+        self.spinner_label = QLabel(self)
+        self.spinner_movie = QMovie('icons/spinner.gif')  # Percorso della GIF animata
+        self.spinner_label.setMovie(self.spinner_movie)
+        self.spinner_label.hide()  # Nascondi lo spinner all'avvio
+        spinner_layout.addWidget(self.spinner_label, alignment=Qt.AlignCenter)
 
-        # Ensure the left and right layouts have the same width
-        self.tree_widget.setFixedWidth(400)
-        self.details_label.setFixedWidth(400)
+        # Layout per centrare lo spinner verticalmente
+        center_layout = QVBoxLayout()
+        center_layout.addStretch()  # Aggiungi spazio vuoto sopra lo spinner
+        center_layout.addLayout(spinner_layout)  # Aggiungi lo spinner centrato orizzontalmente
+        center_layout.addStretch()  # Aggiungi spazio vuoto sotto lo spinner
 
-        middle_layout.addLayout(left_layout)
-        middle_layout.addLayout(right_layout)
+        right_layout.addLayout(center_layout)  # Aggiungi il layout centrale al layout principale
+        right_layout.addStretch()  # Aggiungi stretch per spingere l'etichetta verso l'alto
 
+        right_widget.setLayout(right_layout)
+
+        # Imposta larghezza fissa per i widget
+        left_widget.setFixedWidth(400)
+        right_widget.setFixedWidth(600)  # Modifica questa larghezza come necessario
+
+        # Aggiungi i widget al QSplitter
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+
+        middle_layout.addWidget(splitter)
         return middle_layout
 
     def createBottomLayout(self):
@@ -320,11 +302,16 @@ class MainWindow(QMainWindow):
         self.session.expire_all() # Questo forza il refresh degli oggetti dalla sessione
         backup_job = self.session.get(BackupJob, job_id)
         if backup_job:
+            last_run_formatted = (backup_job.last_run_date.strftime('%d/%m/%Y %H:%M')
+                                  if backup_job.last_run_date else 'Mai eseguito')
             details = (f"Nome: {backup_job.name}\nDestinazione: {backup_job.dest_folder}\n"
-                       f"Orario: {backup_job.schedule_time}\nGiorni: {backup_job.days}\n"
-                       f"Invio Email: {backup_job.send_email}\nEmails: "
-                       f"{', '.join([email.email for email in backup_job.email_addresses])}")
+                   f"Orario: {backup_job.schedule_time}\nGiorni: {backup_job.days}\n"
+                   f"Invio Email: {backup_job.send_email}\nEmails: "
+                   f"{', '.join([email.email for email in backup_job.email_addresses])}\n"
+                   f"Ultima esecuzione: {last_run_formatted}\n"
+                   f"Numero di esecuzioni: {backup_job.run_count or 0}")
             self.details_label.setText(details)
+            self.start_backup_btn.show()
 
     def edit_backup_job(self, item=None):
         if item is not None:
@@ -343,23 +330,10 @@ class MainWindow(QMainWindow):
         else:
             print("No item provided.")
 
-    def edit_backup_job_elimina(self, item):
-        job_id = item.data(0, 1)
-        backup_job = self.session.query(BackupJob).get(job_id)
-        if backup_job:
-            dialog = BackupJobDialog(backup_job, parent=self)  # Pass the backup job to the dialog
-            dialog.backup_job_saved.connect(self.on_backup_job_saved)
-            print("Connected backup_job_saved signal to on_backup_job_saved method")
-            if dialog.exec_() == QDialog.Accepted:
-                self.load_backup_jobs()
-
     def open_backup_job_dialog(self, backup_job=None):
         dialog = BackupJobDialog(backup_job, self)
-        print("Attempting to connect backup_job_saved signal to on_backup_job_saved method")
         dialog.backup_job_saved.connect(self.on_backup_job_saved)
-        print("Connected backup_job_saved signal to on_backup_job_saved method")
         dialog.exec_()
-
 
     def start_backup_job(self):
         if hasattr(self, 'current_backup_job_id'):
@@ -371,6 +345,12 @@ class MainWindow(QMainWindow):
                 email_addresses = [email.email for email in backup_job.email_addresses]
                 print(f"Source paths: {source_paths}")
                 print(f"Destination folder: {backup_job.dest_folder}")
+
+                # Mostra lo spinner e avvia l'animazione
+                self.spinner_label.show()
+                self.spinner_movie.start()
+                self.start_backup_btn.hide()
+                self.update_tray_icon(True)
 
                 # Stop any existing backup thread
                 if self.backup_thread and self.backup_thread.isRunning():
@@ -392,10 +372,25 @@ class MainWindow(QMainWindow):
         self.details_label.setText("Backup completato con successo." if success else "Backup fallito.")
         if success and self.current_backup_job_id:
             backup_job = self.session.get(BackupJob, self.current_backup_job_id)
-            email_addresses = [email.email for email in backup_job.email_addresses] if backup_job else []
-            self.send_email(True, email_addresses)
+            if backup_job:
+                # Aggiorna la data dell'ultima esecuzione
+                backup_job.last_run_date = datetime.datetime.now()
+
+                # Incrementa il contatore delle esecuzioni
+                if backup_job.run_count is None:
+                    backup_job.run_count = 0
+                backup_job.run_count += 1
+
+                # Salva le modifiche nel database
+                self.session.commit()
+                email_addresses = [email.email for email in backup_job.email_addresses] if backup_job else []
+                self.send_email(True, email_addresses)
         else:
             self.send_email(False, [])
+
+        self.spinner_label.hide()
+        self.spinner_movie.stop()
+        self.update_tray_icon(False)
 
     def send_email(self, success, email_addresses):
         sender_email = EMAIL_USER
@@ -439,30 +434,15 @@ class MainWindow(QMainWindow):
                         print(f"Starting backup for job: {job.name}")
                         #self.start_scheduled_backup(job)
                         # Avvia il backup in un nuovo thread
-                    thread = BackupThread([path.path for path in job.paths], job.dest_folder, [email.email for email in job.email_addresses])
-                    thread.progress.connect(self.progress_bar.setValue)
-                    thread.current_file.connect(self.details_label.setText)
-                    thread.finished.connect(self.backup_finished)
-                    thread.start()
+                        thread = BackupThread([path.path for path in job.paths], job.dest_folder, [email.email for email in job.email_addresses])
+                        thread.progress.connect(self.progress_bar.setValue)
+                        thread.current_file.connect(self.details_label.setText)
+                        thread.finished.connect(self.backup_finished)
+                        thread.start()
                 self.last_check_time = current_time
 
             schedule.run_pending()
             time.sleep(1)
-
-
-    '''
-        days_mapping = {
-            'Lunedì': 'Monday',
-            'Martedì': 'Tuesday',
-            'Mercoledì': 'Wednesday',
-            'Giovedì': 'Thursday',
-            'Venerdì': 'Friday',
-            'Sabato': 'Saturday',
-            'Domenica': 'Sunday'
-        }
-    '''
-
-
 
     def is_backup_due(self, job):
         now = datetime.datetime.now()
@@ -506,12 +486,29 @@ class MainWindow(QMainWindow):
         thread.finished.connect(self.backup_finished)
         thread.start()
 
-    def closeEvent(self, event):
+    '''def closeEvent(self, event):
         # Stop the backup thread if it's running
         if self.backup_thread and self.backup_thread.isRunning():
             self.backup_thread.stop()
             self.backup_thread.wait()  # Ensure the thread is fully stopped
-        event.accept()
+        event.accept()'''
+
+    def closeEvent(self, event):
+        # Gestisci il backup thread se è in esecuzione
+        if self.backup_thread and self.backup_thread.isRunning():
+            self.backup_thread.stop()
+            self.backup_thread.wait()  # Assicurati che il thread sia completamente fermo
+
+        # Nascondi la finestra e mostra l'icona nella system tray
+        self.hide()  # Nascondi la finestra principale
+        event.ignore()  # Ignora l'evento di chiusura
+
+    def update_tray_icon(self, in_progress):
+        if in_progress:
+            self.tray_icon.setIcon(QIcon('icons/backup_in_progress.png'))  # Icona durante il backup
+        else:
+            self.tray_icon.setIcon(QIcon('icons/backup.ico'))  # Icona normale
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

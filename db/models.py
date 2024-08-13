@@ -37,6 +37,9 @@ class BackupJob(Base):
     days = Column(String, nullable=False)
     send_email = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    last_run_date = Column(DateTime, nullable=True)
+    run_count = Column(Integer, default=0)  #
+
     paths = relationship('Path', backref='backup_job', cascade='all, delete-orphan')
     email_addresses = relationship('EmailAddress', back_populates='backup_job', cascade='all, delete-orphan')
 
