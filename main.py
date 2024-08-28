@@ -254,6 +254,9 @@ class MainWindow(QMainWindow):
         bottom_layout = QVBoxLayout()
         self.progress_bar = QProgressBar(self)
         bottom_layout.addWidget(self.progress_bar)
+        self.credits = QLabel('E-Solutions Consulenze - esolutionsconsulenze@gmail.com')
+        self.credits.setFixedHeight(20)
+        bottom_layout.addWidget(self.credits)
         return bottom_layout
 
 
