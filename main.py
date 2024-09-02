@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout,
                              QHBoxLayout, QWidget, QTreeWidget,
                              QTreeWidgetItem, QLabel, QProgressBar,
                              QDialog, QAction, QPushButton, QSplitter,
-                             QSystemTrayIcon, QMenu
+                             QSystemTrayIcon, QMenu, QMessageBox
                              )
 from dotenv import load_dotenv
 
@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
 
         # Delete Backup Job
         self.deleteBackupJob = QAction(QIcon('icons/delete-folder.png'), "Cancella Backup Job", self)
-        # Connect to appropriate slot if required
+        self.deleteBackupJob.triggered.connect(self.delete_backup_job)
         self.tb.addAction(self.deleteBackupJob)
         self.tb.addSeparator()
 
@@ -511,12 +511,28 @@ class MainWindow(QMainWindow):
         thread.finished.connect(self.backup_finished)
         thread.start()
 
-    '''def closeEvent(self, event):
-        # Stop the backup thread if it's running
-        if self.backup_thread and self.backup_thread.isRunning():
-            self.backup_thread.stop()
-            self.backup_thread.wait()  # Ensure the thread is fully stopped
-        event.accept()'''
+    def delete_backup_job(self):
+        # Ottieni l'elemento selezionato nel tree_widget
+        selected_items = self.tree_widget.selectedItems()
+
+        if not selected_items:
+            # Nessun elemento selezionato, mostra un messaggio di avviso
+            QMessageBox.warning(self, "Nessuna selezione", "Per cancellare un backup job, devi prima selezionarlo.")
+            return
+
+        # Conferma l'eliminazione
+        reply = QMessageBox.question(self, "Conferma eliminazione",
+                                     "Sei sicuro di voler eliminare il backup job selezionato?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            # Se l'utente conferma, elimina l'elemento selezionato
+            for item in selected_items:
+                index = self.tree_widget.indexOfTopLevelItem(item)
+                self.tree_widget.takeTopLevelItem(index)
+            # Se devi rimuovere anche un backup associato dal sistema (oltre che dall'interfaccia),
+            # aggiungi qui la logica per farlo, come eliminare file o record dal database.
+
 
     def closeEvent(self, event):
         # Gestisci il backup thread se è in esecuzione
